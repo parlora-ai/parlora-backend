@@ -1,55 +1,74 @@
 const express = require('express');
-const fetch = require('node-fetch');
+const https = require('https');
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
 
+// ── Helper: HTTP request ──────────────────────────────────────────
+function httpPost(hostname, path, headers, body) {
+  return new Promise((resolve, reject) => {
+    const data = typeof body === 'string' ? body : JSON.stringify(body);
+    const options = {
+      hostname,
+      path,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(data) },
+    };
+    const req = https.request(options, (res) => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(raw) }); }
+        catch { resolve({ status: res.statusCode, body: raw }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
 // ── POST /translate ───────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
-  const { text, source_lang, target_lang, engine = 'deepl' } = req.body;
+  const { text, source_lang, target_lang } = req.body;
   if (!text || !target_lang) return res.status(400).json({ error: 'MISSING_PARAMS' });
 
-  if (engine === 'deepl') {
-    try {
-      const body = new URLSearchParams({ text, target_lang });
-      if (source_lang && source_lang !== 'auto') body.append('source_lang', source_lang);
+  try {
+    const params = new URLSearchParams({ text, target_lang });
+    if (source_lang && source_lang !== 'auto') params.append('source_lang', source_lang);
 
-      const response = await fetch('https://api-free.deepl.com/v2/translate', {
-        method: 'POST',
-        headers: {
-          Authorization: `DeepL-Auth-Key ${process.env.DEEPL_API_KEY}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: body.toString(),
-      });
+    const result = await httpPost(
+      'api-free.deepl.com',
+      '/v2/translate',
+      {
+        'Authorization': `DeepL-Auth-Key ${process.env.DEEPL_API_KEY}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      params.toString()
+    );
 
-      if (!response.ok) {
-        const err = await response.text();
-        console.error('DeepL error:', err);
-        return res.status(502).json({ error: 'DEEPL_ERROR' });
-      }
-
-      const data = await response.json();
-      const translation = data.translations[0];
-      return res.json({
-        translatedText: translation.text,
-        detectedLang: translation.detected_source_language,
-        engine: 'deepl',
-      });
-    } catch (e) {
-      console.error('DeepL exception:', e);
-      return res.status(502).json({ error: 'DEEPL_EXCEPTION' });
+    if (result.status !== 200) {
+      console.error('DeepL error:', result.status, result.body);
+      return res.status(502).json({ error: 'DEEPL_ERROR', detail: result.body });
     }
-  }
 
-  return res.status(400).json({ error: 'UNKNOWN_ENGINE' });
+    const translation = result.body.translations[0];
+    return res.json({
+      translatedText: translation.text,
+      detectedLang: translation.detected_source_language,
+      engine: 'deepl',
+    });
+  } catch (e) {
+    console.error('DeepL exception:', e.message);
+    return res.status(502).json({ error: 'DEEPL_EXCEPTION', message: e.message });
+  }
 });
 
-// ── Health check ──────────────────────────────────────────────────
-app.get('/', (req, res) => res.json({ status: 'Parlora AI backend running' }));
+// ── GET / ─────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.json({ status: 'Parlora AI backend running ✓' }));
 
 // ── Arrancar ──────────────────────────────────────────────────────
-const PORT = process.env.PORT ?? 8080;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Parlora AI backend escuchando en puerto ${PORT}`));
 module.exports = app;
