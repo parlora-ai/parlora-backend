@@ -5,14 +5,11 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// ── Helper: HTTP request ──────────────────────────────────────────
 function httpPost(hostname, path, headers, body) {
   return new Promise((resolve, reject) => {
     const data = typeof body === 'string' ? body : JSON.stringify(body);
     const options = {
-      hostname,
-      path,
-      method: 'POST',
+      hostname, path, method: 'POST',
       headers: { ...headers, 'Content-Length': Buffer.byteLength(data) },
     };
     const req = https.request(options, (res) => {
@@ -29,14 +26,13 @@ function httpPost(hostname, path, headers, body) {
   });
 }
 
-// ── POST /translate ───────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
-  const { text, source_lang, target_lang } = req.body;
+  const { text, target_lang } = req.body;
   if (!text || !target_lang) return res.status(400).json({ error: 'MISSING_PARAMS' });
 
   try {
+    // Nunca forzamos source_lang — dejamos que DeepL detecte automáticamente
     const params = new URLSearchParams({ text, target_lang });
-    if (source_lang && source_lang !== 'auto') params.append('source_lang', source_lang);
 
     const result = await httpPost(
       'api-free.deepl.com',
@@ -65,10 +61,8 @@ app.post('/translate', async (req, res) => {
   }
 });
 
-// ── GET / ─────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'Parlora AI backend running ✓' }));
 
-// ── Arrancar ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Parlora AI backend escuchando en puerto ${PORT}`));
 module.exports = app;
