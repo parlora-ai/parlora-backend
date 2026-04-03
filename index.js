@@ -34,11 +34,13 @@ function httpsPost(hostname, path, headers, body) {
 
 // ── POST /translate ───────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
-  const { text, target_lang } = req.body;
+  const { text, target_lang, context } = req.body;
   if (!text || !target_lang) return res.status(400).json({ error: 'MISSING_PARAMS' });
 
   try {
     const params = new URLSearchParams({ text, target_lang });
+    // Contexto del chunk anterior — DeepL lo usa para coherencia pero NO lo traduce
+    if (context) params.append('context', context);
     const result = await httpsPost(
       'api-free.deepl.com', '/v2/translate',
       { 'Authorization': `DeepL-Auth-Key ${process.env.DEEPL_API_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
