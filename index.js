@@ -178,7 +178,7 @@ const rooms = new Map();
 const ROOM_INACTIVITY_MS = 5 * 60 * 1000; // 5 minutos
 
 function generateRoomId() {
-  return crypto.randomBytes(4).toString('hex').toUpperCase(); // ej: A3F7B2C1
+  return String(Math.floor(10000 + Math.random() * 90000)); // ej: A3F7B2C1
 }
 
 function sendToWs(ws, data) {
