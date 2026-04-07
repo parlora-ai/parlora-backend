@@ -178,7 +178,7 @@ const rooms = new Map();
 const ROOM_INACTIVITY_MS = 5 * 60 * 1000; // 5 minutos
 
 function generateRoomId() {
-  return String(Math.floor(10000 + Math.random() * 90000)); // ej: A3F7B2C1
+  return crypto.randomBytes(4).toString('hex').toUpperCase(); // ej: A3F7B2C1
 }
 
 function sendToWs(ws, data) {
@@ -314,7 +314,7 @@ wss.on('connection', (ws, req) => {
     if (room.guest) { ws.close(4002, 'Guest already connected'); return; }
     room.guest = ws;
     console.log(`[WS] Guest connected to room ${roomId}`);
-    sendToWs(ws, { type: 'connected', role: 'guest', roomId, langHost: room.langHost, langGuest: room.langGuest });
+    sendToWs(ws, { type: 'connected', role: 'guest', roomId, langHost: room.langHost, langGuest: room.langGuest, hasHost: !!room.host });
     if (room.host) {
       sendToWs(room.host, { type: 'peer_joined', role: 'guest' });
       sendToWs(ws, { type: 'peer_joined', role: 'host' });
