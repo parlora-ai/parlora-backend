@@ -65,7 +65,7 @@ app.post('/translate', async (req, res) => {
 });
 
 // ── Filtro de alucinaciones Whisper ───────────────────────────────
-const NO_SPEECH_THRESHOLD = 0.6;
+const NO_SPEECH_THRESHOLD = 0.5; // tightened from 0.6
 const AVG_LOGPROB_THRESHOLD = -0.8;
 const HALLUCINATION_PHRASES = [
   'suscríbete', 'subscribe', 'like y suscríbete', 'gracias por ver',
@@ -73,6 +73,18 @@ const HALLUCINATION_PHRASES = [
   'no olvides', 'síguenos', 'follow us', 'visit our website',
   'www.', '.com', '.es', 'youtube', 'instagram', 'twitter',
 ];
+
+// [FIX 5] Simple similarity check (word overlap ratio)
+function textSimilarity(a, b) {
+  const wa = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const wb = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  if (wa.size === 0 || wb.size === 0) return 0;
+  const intersection = [...wa].filter(w => wb.has(w)).length;
+  return intersection / Math.min(wa.size, wb.size);
+}
+
+// Track last transcription per room for similarity dedup
+const lastTranscriptPerRoom = new Map();
 
 function isHallucination(text, segments) {
   if (!text || !text.trim()) return true;
@@ -93,6 +105,7 @@ function isHallucination(text, segments) {
 // ── POST /transcribe ──────────────────────────────────────────────
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   const language = req.body.language ?? 'es';
+  const prompt = req.body.prompt ?? ''; // [FIX 4] context prompt for Whisper
   const filePath = req.file?.path;
   if (!filePath) return res.status(400).json({ error: 'NO_AUDIO', text: '' });
   try {
@@ -101,6 +114,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     formData.append('model', 'whisper-large-v3-turbo');
     formData.append('language', language.slice(0, 2).toLowerCase());
     formData.append('response_format', 'verbose_json');
+    if (prompt) formData.append('prompt', prompt.slice(0, 224)); // Whisper prompt max 224 tokens
     const groqRes = await new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.groq.com', path: '/openai/v1/audio/transcriptions', method: 'POST',
@@ -136,6 +150,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 // Devuelve el texto transcrito para que el backend haga la traducción via WS
 app.post('/transcribe-realtime', upload.single('audio'), async (req, res) => {
   const language = req.body.language ?? 'es';
+  const prompt = req.body.prompt ?? ''; // [FIX 4] context prompt for Whisper
   const filePath = req.file?.path;
   if (!filePath) return res.status(400).json({ error: 'NO_AUDIO', text: '' });
   try {
@@ -144,6 +159,7 @@ app.post('/transcribe-realtime', upload.single('audio'), async (req, res) => {
     formData.append('model', 'whisper-large-v3-turbo');
     formData.append('language', language.slice(0, 2).toLowerCase());
     formData.append('response_format', 'verbose_json');
+    if (prompt) formData.append('prompt', prompt.slice(0, 224)); // Whisper prompt max 224 tokens
     const groqRes = await new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.groq.com', path: '/openai/v1/audio/transcriptions', method: 'POST',
@@ -239,7 +255,7 @@ app.get('/room/:roomId', (req, res) => {
 // El cliente envía audio transcrito + roomId + role
 // El backend traduce y lo reenvía al otro participante via WS
 app.post('/room/relay', async (req, res) => {
-  const { roomId, role, text } = req.body; // role: 'host' | 'guest'
+  const { roomId, role, text, context } = req.body; // role: 'host' | 'guest'
   if (!roomId || !role || !text) return res.status(400).json({ error: 'MISSING_PARAMS' });
 
   const room = rooms.get(roomId);
@@ -252,8 +268,10 @@ app.post('/room/relay', async (req, res) => {
     const srcLang = role === 'host' ? room.langHost : room.langGuest;
     const tgtLang = role === 'host' ? room.langGuest : room.langHost;
 
-    // Traducir con DeepL
-    const params = new URLSearchParams({ text, target_lang: tgtLang });
+    // Traducir con DeepL (context helps prevent hallucinations)
+    const deeplParams = { text, target_lang: tgtLang };
+    if (context) deeplParams.context = context;
+    const params = new URLSearchParams(deeplParams);
     const result = await httpsPost(
       'api-free.deepl.com', '/v2/translate',
       { 'Authorization': `DeepL-Auth-Key ${process.env.DEEPL_API_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
