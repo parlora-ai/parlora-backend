@@ -65,20 +65,20 @@ app.post('/translate', async (req, res) => {
 });
 
 // ── Filtro de alucinaciones Whisper ───────────────────────────────
-const NO_SPEECH_THRESHOLD = 0.3; // tightened further
-const AVG_LOGPROB_THRESHOLD = -0.6; // tightened
+const NO_SPEECH_THRESHOLD = 0.6; // standard Whisper threshold — 0.3 was too strict
+const AVG_LOGPROB_THRESHOLD = -0.9; // relaxed — -0.6 was filtering valid speech with accents/noise
 const HALLUCINATION_PHRASES = [
+  // YouTube/video platform phrases — Whisper hallucinates these on silence
   'suscríbete', 'subscribe', 'like y suscríbete', 'gracias por ver',
-  'thanks for watching', 'thank you for watching', 'don\'t forget to',
-  'no olvides', 'síguenos', 'follow us', 'visit our website',
-  'www.', '.com', '.es', 'youtube', 'instagram', 'twitter',
+  'thanks for watching', 'thank you for watching', 'don\'t forget to like',
+  'no olvides suscribirte', 'síguenos en', 'follow us on',
+  'visit our website', 'www.', '.com', 'youtube', 'instagram', 'twitter',
+  // Subtitle/transcript markers
   'subtítulos', 'subtitles', 'transcripción', 'transcript',
-  'música', 'music', '♪', '♩', '...', 'silencio', 'silence',
-  'amara.org', 'donjoy', 'podéis', 'siguiente vídeo',
-  // More Whisper silence hallucinations
-  'una nueva', 'hasta luego', 'hasta la próxima', 'que tengan',
-  'buenas noches', 'que te vaya', 'igualmente', 'thank you.',
-  'bye', 'goodbye', 'see you', 'have a nice', 'take care',
+  'amara.org', 'donjoy',
+  // Music markers
+  '♪', '♩',
+  // Whisper-specific silence hallucinations (exact matches only via startsWith)
 ];
 
 // [FIX 5] Simple similarity check (word overlap ratio)
@@ -96,18 +96,26 @@ const lastTranscriptPerRoom = new Map();
 function isHallucination(text, segments) {
   if (!text || !text.trim()) return true;
   const lower = text.toLowerCase().trim();
-  // Too short - likely noise
+  // Too short - likely noise (single word or less)
   const wordCount = lower.split(/\s+/).filter(w => w.length > 1).length;
   if (wordCount < 2) { console.log('[FILTER] Too short:', text); return true; }
+  // Check for known hallucination phrases (partial match)
   if (HALLUCINATION_PHRASES.some(phrase => lower.includes(phrase))) {
     console.log(`[FILTER] Hallucination phrase: "${text}"`);
     return true;
   }
+  // Rely on Whisper's own confidence metrics — primary filter
   if (segments && segments.length > 0) {
     const avgNoSpeech = segments.reduce((sum, s) => sum + (s.no_speech_prob || 0), 0) / segments.length;
     const avgLogprob = segments.reduce((sum, s) => sum + (s.avg_logprob || 0), 0) / segments.length;
-    if (avgNoSpeech > NO_SPEECH_THRESHOLD) { console.log(`[FILTER] no_speech_prob: ${avgNoSpeech.toFixed(2)}`); return true; }
-    if (avgLogprob < AVG_LOGPROB_THRESHOLD) { console.log(`[FILTER] avg_logprob: ${avgLogprob.toFixed(2)}`); return true; }
+    if (avgNoSpeech > NO_SPEECH_THRESHOLD) {
+      console.log(`[FILTER] no_speech_prob too high: ${avgNoSpeech.toFixed(2)} > ${NO_SPEECH_THRESHOLD}`);
+      return true;
+    }
+    if (avgLogprob < AVG_LOGPROB_THRESHOLD) {
+      console.log(`[FILTER] avg_logprob too low: ${avgLogprob.toFixed(2)} < ${AVG_LOGPROB_THRESHOLD}`);
+      return true;
+    }
   }
   return false;
 }
