@@ -257,6 +257,8 @@ app.post('/room/create', (req, res) => {
 });
 
 // ── GET /room/:roomId ─────────────────────────────────────────────
+app.get('/health', (req, res) => { res.status(200).json({ ok: true }); });
+
 app.get('/room/:roomId', (req, res) => {
   const room = rooms.get(req.params.roomId);
   if (!room) return res.status(404).json({ error: 'ROOM_NOT_FOUND' });
@@ -392,6 +394,12 @@ wss.on('connection', (ws, req) => {
       if (msg.type === 'chat') {
         const targetWs = role === 'host' ? room.guest : room.host;
         sendToWs(targetWs, { type: 'chat', from: role, text: msg.text });
+      }
+
+      // Bloqueo de micrófono: avisa al otro que alguien está hablando
+      if (msg.type === 'peer_speaking') {
+        const targetWs = role === 'host' ? room.guest : room.host;
+        sendToWs(targetWs, { type: 'peer_speaking', role, speaking: msg.speaking });
       }
 
       // Confirmación de que recibió la traducción (para métricas futuras)
