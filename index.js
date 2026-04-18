@@ -92,15 +92,21 @@ function isHallucination(text, segments) {
     return true;
   }
   // Rely on Whisper's own confidence metrics — primary filter
+  // Use MIN no_speech (best segment) not AVG — chunks with silence+speech
+  // have high avg but the speech segments themselves are confident
   if (segments && segments.length > 0) {
-    const avgNoSpeech = segments.reduce((sum, s) => sum + (s.no_speech_prob || 0), 0) / segments.length;
+    const minNoSpeech = Math.min(...segments.map(s => s.no_speech_prob || 0));
+    const maxNoSpeech = Math.max(...segments.map(s => s.no_speech_prob || 0));
     const avgLogprob = segments.reduce((sum, s) => sum + (s.avg_logprob || 0), 0) / segments.length;
-    if (avgNoSpeech > NO_SPEECH_THRESHOLD) {
-      console.log(`[FILTER] no_speech_prob too high: ${avgNoSpeech.toFixed(2)} > ${NO_SPEECH_THRESHOLD}`);
+    // Only filter if ALL segments are silence (min is also high)
+    if (minNoSpeech > NO_SPEECH_THRESHOLD) {
+      console.log(`[FILTER] all segments silent: min_no_speech=${minNoSpeech.toFixed(2)}`);
       return true;
     }
-    if (avgLogprob < AVG_LOGPROB_THRESHOLD) {
-      console.log(`[FILTER] avg_logprob too low: ${avgLogprob.toFixed(2)} < ${AVG_LOGPROB_THRESHOLD}`);
+    // Only filter logprob if the best segments are also bad
+    const bestLogprob = Math.max(...segments.map(s => s.avg_logprob || -1));
+    if (bestLogprob < AVG_LOGPROB_THRESHOLD) {
+      console.log(`[FILTER] best_logprob too low: ${bestLogprob.toFixed(2)} < ${AVG_LOGPROB_THRESHOLD}`);
       return true;
     }
   }
@@ -153,7 +159,10 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     const segments = groqRes.body.segments ?? [];
     if (isHallucination(text, segments)) return res.json({ text: '', engine: 'groq-whisper', filtered: true });
     console.log(`Transcribed: "${text.slice(0, 80)}"`);
-    return res.json({ text, engine: 'groq-whisper' });
+    const avgLogprob = segments.length > 0
+      ? segments.reduce((sum, s) => sum + (s.avg_logprob || 0), 0) / segments.length
+      : 0;
+    return res.json({ text, avgLogprob, engine: 'groq-whisper' });
   } catch (e) {
     console.error('Transcribe exception:', e.message);
     if (filePath && fs.existsSync(filePath)) fs.unlink(filePath, () => {});
